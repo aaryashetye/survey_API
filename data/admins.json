@@ -1,0 +1,32 @@
+[
+    {
+        "_id": "f40980b8-b684-4c7e-899e-d6a5aa770a73",
+        "name": "Arya",
+        "email": "arya@example.com",
+        "password": "mypassword"
+    },
+    {
+        "_id": "2b9b7989-f587-49c8-900d-3ffdaca5851e",
+        "name": "police officer",
+        "email": "policeofficer@example.com",
+        "password": "policeofficer123"
+    },
+    {
+        "_id": "ac37f093-8b4c-4506-924f-d56b5a5242d2",
+        "name": "police officer",
+        "email": "policeofficer@example.com",
+        "password": "policeofficer123"
+    },
+    {
+        "_id": "174e07fc-e533-4ce3-8491-3ab306acbfe1",
+        "name": "pratiksha",
+        "email": "pratiksha66@gmail.com",
+        "password": "pratiksha"
+    },
+    {
+        "_id": "7299ee3c-8d47-4ee9-898e-76cf45b0343e",
+        "name": "Municipal Officer",
+        "email": "admin@example.com",
+        "password": "hashed_password"
+    }
+]
