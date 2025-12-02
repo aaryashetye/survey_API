@@ -196,6 +196,13 @@ def get_questions_by_survey(survey_id):
         return jsonify({"success": False, "message": "Questions not found for this survey"}), 404
     return jsonify(serialize_to_pascal(doc)), 200
 
+# ----------------- GET all questions -----------------
+@question_bp.route("/questions", methods=["GET"])
+def get_all_questions():
+    # return all survey question-sets serialized to PascalCase
+    docs = list(questions.find({}))
+    return jsonify([serialize_to_pascal(d) for d in docs]), 200
+
 # ----------------- DELETE -----------------
 @question_bp.route("/questions/<string:survey_id>", methods=["DELETE"])
 def delete_questions(survey_id):
