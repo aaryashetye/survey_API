@@ -1,28 +1,17 @@
-# file: question_bp.py
+
+# question_bp.py
 from flask import Blueprint, jsonify, request
-from database import questions  # MongoDB collection (assumed already configured)
+from database import questions  # MongoDB collection
 import uuid
 from datetime import datetime, timezone
-import re
 from bson import ObjectId
 
 question_bp = Blueprint("question_bp", __name__)
 
-GUID_RE = re.compile(r'^[0-9a-fA-F0-9\-]{36}$')
-ALLOWED_Q_TYPES = {"mcq", "yes_no", "text", "number", "dropdown", "multi_select"}
-
-# ---------- helpers ----------
-def make_guid():
-    return str(uuid.uuid4())
-
 def iso_now():
     return datetime.now(timezone.utc).astimezone().isoformat()
 
-def validate_guid(g):
-    return isinstance(g, str) and GUID_RE.match(g)
-
 def serialize_value(v):
-    # convert ObjectId to string recursively for dict/list
     if isinstance(v, ObjectId):
         return str(v)
     if isinstance(v, dict):
@@ -31,17 +20,27 @@ def serialize_value(v):
         return [serialize_value(x) for x in v]
     return v
 
-def serialize_doc(doc):
+def serialize_to_pascal(doc):
     if not doc:
         return doc
-    d = {}
-    for k, v in doc.items():
-        # convert top-level _id (could be string GUID or ObjectId) to string
-        if k == "_id":
-            d[k] = str(v)
-        else:
-            d[k] = serialize_value(v)
-    return d
+    out = {}
+    out["Id"] = str(doc.get("_id"))
+    out["SurveyId"] = doc.get("survey_id")
+    questions_out = []
+    for q in doc.get("questions", []):
+        q_out = {
+            "Qno": q.get("qno"),
+            "Text": q.get("text"),
+            "Options": [
+                {"OptionId": o.get("option_id"), "Option": o.get("option")}
+                for o in q.get("options", [])
+            ]
+        }
+        questions_out.append(q_out)
+    out["Questions"] = questions_out
+    out["CreatedAt"] = doc.get("created_at")
+    out["UpdatedAt"] = doc.get("updated_at")
+    return out
 
 def bad_request(msg, errors=None):
     payload = {"success": False, "message": msg}
@@ -49,195 +48,158 @@ def bad_request(msg, errors=None):
         payload["errors"] = errors
     return jsonify(payload), 400
 
-# ---------- CREATE survey questions ----------
+def pick(dct, *keys, default=None):
+    for k in keys:
+        if isinstance(dct, dict) and k in dct:
+            return dct[k]
+    return default
+
+def ensure_int(v):
+    if v is None:
+        return None
+    if isinstance(v, int):
+        return v
+    try:
+        return int(v)
+    except Exception:
+        return None
+
+def next_qno(survey_id):
+    doc = questions.find_one({"survey_id": survey_id}, {"questions.qno": 1})
+    max_q = 0
+    if doc and "questions" in doc:
+        for q in doc["questions"]:
+            qno = ensure_int(q.get("qno"))
+            if qno and qno > max_q:
+                max_q = qno
+    return max_q + 1
+
+def next_option_id_for_q(survey_id, qno):
+    doc = questions.find_one({"survey_id": survey_id}, {"questions": 1})
+    if not doc:
+        return 1
+    for q in doc.get("questions", []):
+        if ensure_int(q.get("qno")) == qno:
+            max_o = 0
+            for o in q.get("options", []):
+                oid = ensure_int(o.get("option_id"))
+                if oid and oid > max_o:
+                    max_o = oid
+            return max_o + 1
+    return 1
+
+# ----------------- CREATE / REPLACE questions (Model B) -----------------
 @question_bp.route("/questions", methods=["POST"])
 def create_questions():
     data = request.get_json(force=True, silent=True)
     if not data:
         return bad_request("Missing JSON body")
 
-    survey_id = data.get("survey_id")
-    incoming_questions = data.get("questions", [])
+    # accept surveyId, survey_id or id
+    survey_id = pick(data, "surveyId", "survey_id", "id") or str(uuid.uuid4())
+    incoming = pick(data, "Questions", "questions")
+    if not isinstance(incoming, list) or len(incoming) == 0:
+        return bad_request("Validation failed", {"questions": "questions must be a non-empty array."})
 
     errors = {}
-    if not survey_id or not validate_guid(survey_id):
-        errors["survey_id"] = "survey_id is required and must be a GUID."
-
-    if not isinstance(incoming_questions, list) or len(incoming_questions) == 0:
-        errors["questions"] = "questions must be a non-empty array."
-
-    # validate each question minimally
     normalized_questions = []
-    for i, q in enumerate(incoming_questions):
+    # compute next qno lazily
+    next_qno_cache = None
+
+    for i, q in enumerate(incoming):
         if not isinstance(q, dict):
             errors[f"questions[{i}]"] = "Each question must be an object."
             continue
 
-        q_text = q.get("question_text")
-        q_type = q.get("question_type")
-        q_options = q.get("options", [])
+        # accept Qno / qno
+        qno_in = pick(q, "Qno", "qno")
+        qno = ensure_int(qno_in)
+        if qno is None:
+            if next_qno_cache is None:
+                next_qno_cache = next_qno(survey_id)
+            qno = next_qno_cache
+            next_qno_cache += 1
 
-        if not q_text or not isinstance(q_text, str):
-            errors[f"questions[{i}].question_text"] = "question_text is required and must be a string."
-        if q_type not in ALLOWED_Q_TYPES:
-            errors[f"questions[{i}].question_type"] = f"question_type is required and must be one of {sorted(ALLOWED_Q_TYPES)}."
+        # accept Text / text
+        text = pick(q, "Text", "text")
+        if not text or not isinstance(text, str) or text.strip() == "":
+            errors[f"questions[{i}].text"] = "text is required and must be a non-empty string."
+            continue
+        text = text.strip()
 
-        # For choice-type questions ensure options present
-        if q_type in {"mcq", "dropdown", "multi_select", "yes_no"}:
-            if not isinstance(q_options, list) or len(q_options) == 0:
-                errors[f"questions[{i}].options"] = "options array is required for choice-type questions."
-            else:
-                for j, opt in enumerate(q_options):
-                    if not isinstance(opt, dict):
-                        errors[f"questions[{i}].options[{j}]"] = "Each option must be an object with at least a 'label'."
-                    elif not opt.get("label"):
-                        errors[f"questions[{i}].options[{j}].label"] = "label is required for each option."
+        # Options: accept Options / options
+        opts_in = pick(q, "Options", "options") or []
+        if not isinstance(opts_in, list):
+            errors[f"questions[{i}].options"] = "options must be an array (can be empty)."
+            continue
 
-        # If validation passed for this question, normalize it
-        if not any(k.startswith(f"questions[{i}]") for k in errors.keys()):
-            question_id = make_guid()
-            normalized_opts = []
-            for opt in q_options:
-                normalized_opts.append({
-                    "option_id": make_guid(),
-                    "label": opt.get("label"),
-                    "value": opt.get("value", opt.get("label"))
-                })
-            normalized_questions.append({
-                "question_id": question_id,
-                "question_text": q_text,
-                "question_type": q_type,
-                "options": normalized_opts,
-                "required": bool(q.get("required", False)),
-                "order": int(q.get("order", 0)),
-                "metadata": q.get("metadata", {})
+        normalized_opts = []
+        next_opt_cache = None
+        for j, opt in enumerate(opts_in):
+            if not isinstance(opt, dict):
+                errors[f"questions[{i}].options[{j}]"] = "Each option must be an object."
+                continue
+            label = pick(opt, "Option", "option")
+            if not label or not isinstance(label, str):
+                errors[f"questions[{i}].options[{j}].option"] = "Option text is required."
+                continue
+            oid_in = pick(opt, "OptionId", "optionId", "option_id")
+            oid = ensure_int(oid_in)
+            if oid is None:
+                if next_opt_cache is None:
+                    next_opt_cache = next_option_id_for_q(survey_id, qno)
+                oid = next_opt_cache
+                next_opt_cache += 1
+            normalized_opts.append({
+                "option_id": oid,
+                "option": label.strip()
             })
+
+        normalized_questions.append({
+            "qno": qno,
+            "text": text,
+            "options": normalized_opts
+        })
 
     if errors:
         return bad_request("Validation failed", errors)
 
-    doc = {
-        "_id": make_guid(),  # top-level document id (survey_questions document)
-        "survey_id": survey_id,
-        "questions": normalized_questions,
-        "created_at": iso_now()
-    }
-
-    questions.insert_one(doc)
+    # Upsert / replace questions doc for this survey
+    existing = questions.find_one({"survey_id": survey_id})
+    now = iso_now()
+    if existing:
+        questions.update_one({"survey_id": survey_id}, {"$set": {"questions": normalized_questions, "updated_at": now}})
+        doc_id = existing["_id"]
+    else:
+        doc = {
+            "_id": str(uuid.uuid4()),
+            "survey_id": survey_id,
+            "questions": normalized_questions,
+            "created_at": now,
+            "updated_at": now
+        }
+        questions.insert_one(doc)
+        doc_id = doc["_id"]
 
     return jsonify({
         "success": True,
-        "message": "Survey questions created successfully.",
-        "survey_questions_id": doc["_id"],
-        "survey_id": survey_id
+        "message": "Survey questions created/updated successfully.",
+        "surveyQuestionsId": str(doc_id),
+        "surveyId": survey_id
     }), 201
 
-# ---------- GET all questions ----------
-@question_bp.route("/questions", methods=["GET"])
-def get_all_questions():
-    cursor = list(questions.find({}))
-    serialized = [serialize_doc(d) for d in cursor]
-    return jsonify(serialized), 200
-
-# ---------- GET questions for a single survey ----------
+# ----------------- GET by surveyId -----------------
 @question_bp.route("/questions/<string:survey_id>", methods=["GET"])
 def get_questions_by_survey(survey_id):
-    if not validate_guid(survey_id):
-        return bad_request("Invalid survey_id (GUID expected).")
-    q = questions.find_one({"survey_id": survey_id})
-    if q:
-        return jsonify(serialize_doc(q)), 200
-    return jsonify({"success": False, "message": "Questions not found for this survey"}), 404
-
-# ---------- UPDATE questions ----------
-@question_bp.route("/questions/<string:survey_id>", methods=["PUT"])
-def update_questions(survey_id):
-    if not validate_guid(survey_id):
-        return bad_request("Invalid survey_id (GUID expected).")
-
-    data = request.get_json(force=True, silent=True)
-    if not data:
-        return bad_request("Missing JSON body")
-
-    incoming_questions = data.get("questions", [])
-    if not isinstance(incoming_questions, list):
-        return bad_request("questions must be an array.")
-
-    errors = {}
-    normalized_questions = []
-    for i, q in enumerate(incoming_questions):
-        if not isinstance(q, dict):
-            errors[f"questions[{i}]"] = "Each question must be an object."
-            continue
-
-        # allow client to pass existing question_id (to preserve identity)
-        qid = q.get("question_id") if validate_guid(q.get("question_id")) else make_guid()
-        q_text = q.get("question_text")
-        q_type = q.get("question_type")
-        q_options = q.get("options", [])
-
-        if not q_text or not isinstance(q_text, str):
-            errors[f"questions[{i}].question_text"] = "question_text is required and must be a string."
-        if q_type not in ALLOWED_Q_TYPES:
-            errors[f"questions[{i}].question_type"] = f"question_type is required and must be one of {sorted(ALLOWED_Q_TYPES)}."
-
-        # normalize/validate options; allow option_id if provided else generate
-        normalized_opts = []
-        if q_type in {"mcq", "dropdown", "multi_select", "yes_no"}:
-            if not isinstance(q_options, list) or len(q_options) == 0:
-                errors[f"questions[{i}].options"] = "options array is required for choice-type questions."
-            else:
-                for j, opt in enumerate(q_options):
-                    if not isinstance(opt, dict):
-                        errors[f"questions[{i}].options[{j}]"] = "Each option must be an object with at least a 'label'."
-                    elif not opt.get("label"):
-                        errors[f"questions[{i}].options[{j}].label"] = "label is required for each option."
-                    else:
-                        oid = opt.get("option_id") if validate_guid(opt.get("option_id")) else make_guid()
-                        normalized_opts.append({
-                            "option_id": oid,
-                            "label": opt.get("label"),
-                            "value": opt.get("value", opt.get("label"))
-                        })
-
-        if not any(k.startswith(f"questions[{i}]") for k in errors.keys()):
-            normalized_questions.append({
-                "question_id": qid,
-                "question_text": q_text,
-                "question_type": q_type,
-                "options": normalized_opts,
-                "required": bool(q.get("required", False)),
-                "order": int(q.get("order", 0)),
-                "metadata": q.get("metadata", {})
-            })
-
-    if errors:
-        return bad_request("Validation failed", errors)
-
-    result = questions.update_one(
-        {"survey_id": survey_id},
-        {"$set": {"questions": normalized_questions, "updated_at": iso_now()}}
-    )
-
-    if result.matched_count == 0:
+    doc = questions.find_one({"survey_id": survey_id})
+    if not doc:
         return jsonify({"success": False, "message": "Questions not found for this survey"}), 404
+    return jsonify(serialize_to_pascal(doc)), 200
 
-    updated_questions = questions.find_one({"survey_id": survey_id})
-    return jsonify({
-        "success": True,
-        "message": "Survey questions updated successfully!",
-        "data": serialize_doc(updated_questions)
-    }), 200
-
-# ---------- DELETE questions ----------
+# ----------------- DELETE -----------------
 @question_bp.route("/questions/<string:survey_id>", methods=["DELETE"])
 def delete_questions(survey_id):
-    if not validate_guid(survey_id):
-        return bad_request("Invalid survey_id (GUID expected).")
-
-    result = questions.delete_one({"survey_id": survey_id})
-
-    if result.deleted_count == 0:
+    res = questions.delete_one({"survey_id": survey_id})
+    if res.deleted_count == 0:
         return jsonify({"success": False, "message": "Questions not found for this survey"}), 404
-
     return jsonify({"success": True, "message": "Survey questions deleted successfully!"}), 200
