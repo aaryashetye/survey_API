@@ -150,9 +150,15 @@ def create_questions():
                     next_opt_cache = next_option_id_for_q(survey_id, qno)
                 oid = next_opt_cache
                 next_opt_cache += 1
+            rating_raw = opt.get("rating", 0)  # 0 = no rating / neutral
+            try:
+                rating = int(rating_raw)
+            except Exception:
+                rating = 0
             normalized_opts.append({
                 "option_id": oid,
-                "option": label.strip()
+                "option": label.strip(),
+                "rating": rating
             })
 
         normalized_questions.append({
