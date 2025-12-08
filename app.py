@@ -38,4 +38,4 @@ if __name__ == "__main__":
     # Disable the reloader on Windows to avoid socket races.
     app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)
 
-CORS(app, resources={r"/*": {"origins": ["http://localhost:3000"]}})
+CORS(app, resources={r"/*": {"origins": ["*"]}})
