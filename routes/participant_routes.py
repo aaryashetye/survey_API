@@ -1,4 +1,3 @@
-# file: participant_bp.py
 from flask import Blueprint, jsonify, request
 from database import participants  # MongoDB collection
 import uuid
@@ -34,12 +33,15 @@ def serialize_value(v):
 
 
 def serialize_doc(doc):
+    """Map DB fields -> API fields."""
     if not doc:
         return doc
     out = {}
     for k, v in doc.items():
         if k == "_id":
-            out["id"] = str(v)          # expose as "id"
+            out["id"] = str(v)
+        elif k == "surveyId":
+            out["surveyId"] = v
         else:
             out[k] = serialize_value(v)
     return out
@@ -52,49 +54,40 @@ def bad_request(msg, errors=None):
     return jsonify(payload), 400
 
 
-def is_valid_phone(p):
-    if not p:
-        return False
-    # very basic international-ish phone pattern (allows digits, +, -, spaces)
-    return bool(re.match(r'^[\+\d][\d\-\s]{5,20}$', str(p)))
-
-
-def is_valid_email(e):
-    if not e:
-        return False
-    return bool(re.match(r"^[^@]+@[^@]+\.[^@]+$", str(e)))
-
-
 # ----------------- CREATE Participant -----------------
 @participant_bp.route("/participants", methods=["POST"])
 def create_participant():
+    """
+    Expected body:
+    {
+      "id": "guid",
+      "name": "Asha Patil",
+      "age": 35,
+      "gender": "female",
+      "surveyId": "a1b2c3d4-e5f6-7a8b-9c0d-ef1234567890"
+    }
+    """
     data = request.get_json(force=True, silent=True)
     if not data:
         return bad_request("Missing JSON body")
 
-    # expected main fields
-    participant_id = data.get("id")            # GUID from client
+    participant_id = data.get("id")
     name = data.get("name")
     age = data.get("age")
     gender = data.get("gender")
-    survey_id = data.get("surveyId") or data.get("survey_id")
-
-    # still optionally allow these
-    phone = data.get("phone")
-    email = data.get("email")
-    location = data.get("location")  # optional: {lat, lng}
+    survey_id = data.get("surveyId")
 
     errors = {}
 
-    # id must be a GUID string
-    if not participant_id or not isinstance(participant_id, str):
-        errors["id"] = "id is required and must be a string GUID."
-    elif not validate_guid(participant_id):
-        errors["id"] = "id must be a valid GUID."
+    # id: required GUID
+    if not participant_id or not validate_guid(participant_id):
+        errors["id"] = "id is required and must be a valid GUID."
 
+    # name
     if not name or not isinstance(name, str):
         errors["name"] = "name is required and must be a string."
 
+    # age
     if age is not None:
         try:
             age = int(age)
@@ -103,44 +96,24 @@ def create_participant():
         except Exception:
             errors["age"] = "age must be an integer."
 
-    if gender is not None and gender not in {"male", "female", "other", "prefer_not_to_say"}:
-        errors["gender"] = "gender must be one of male/female/other/prefer_not_to_say or omitted."
+    # gender
+    allowed_genders = {"male", "female", "other", "prefer_not_to_say"}
+    if gender not in allowed_genders:
+        errors["gender"] = "gender must be one of male/female/other/prefer_not_to_say."
 
-    if survey_id is not None and not validate_guid(survey_id):
-        errors["surveyId"] = "surveyId must be a GUID if provided."
-
-    if phone is not None and not is_valid_phone(phone):
-        errors["phone"] = "invalid phone format."
-    if email is not None and not is_valid_email(email):
-        errors["email"] = "invalid email format."
-
-    # normalize location if provided
-    if location is not None:
-        if not isinstance(location, dict) or location.get("lat") is None or location.get("lng") is None:
-            errors["location"] = "location must be an object with lat and lng numbers."
-        else:
-            try:
-                location = {
-                    "lat": float(location.get("lat")),
-                    "lng": float(location.get("lng")),
-                    "accuracy_m": location.get("accuracy_m")
-                }
-            except Exception:
-                errors["location"] = "lat and lng must be numbers."
+    # surveyId: required GUID
+    if not survey_id or not validate_guid(survey_id):
+        errors["surveyId"] = "surveyId is required and must be a valid GUID."
 
     if errors:
         return bad_request("Validation failed", errors)
 
-    # use client-sent GUID as _id
     doc = {
-        "_id": participant_id,
+        "_id": participant_id,      # client-chosen GUID
         "name": name,
         "age": age,
         "gender": gender,
-        "survey_id": survey_id,
-        "phone": phone,
-        "email": email,
-        "location": location,
+        "surveyId": survey_id,
         "created_at": iso_now()
     }
 
@@ -164,8 +137,10 @@ def get_all_participants():
 # ----------------- GET single Participant -----------------
 @participant_bp.route("/participants/<string:participant_id>", methods=["GET"])
 def get_participant(participant_id):
+    # participant_id is a GUID
     if not validate_guid(participant_id):
         return bad_request("Invalid participant_id (GUID expected).")
+
     p = participants.find_one({"_id": participant_id})
     if p:
         return jsonify(serialize_doc(p)), 200
@@ -175,8 +150,10 @@ def get_participant(participant_id):
 # ----------------- UPDATE Participant -----------------
 @participant_bp.route("/participants/<string:participant_id>", methods=["PUT"])
 def update_participant(participant_id):
+    # id itself is not changed, only other fields
     if not validate_guid(participant_id):
         return bad_request("Invalid participant_id (GUID expected).")
+
     data = request.get_json(force=True, silent=True)
     if not data:
         return bad_request("Missing JSON body")
@@ -184,12 +161,14 @@ def update_participant(participant_id):
     updates = {}
     errors = {}
 
+    # name
     if "name" in data:
         if not isinstance(data.get("name"), str):
             errors["name"] = "name must be a string."
         else:
             updates["name"] = data.get("name")
 
+    # age
     if "age" in data:
         try:
             a = int(data.get("age"))
@@ -200,44 +179,20 @@ def update_participant(participant_id):
         except Exception:
             errors["age"] = "age must be an integer."
 
+    # gender
     if "gender" in data:
-        if data.get("gender") not in {"male", "female", "other", "prefer_not_to_say"}:
+        allowed_genders = {"male", "female", "other", "prefer_not_to_say"}
+        if data.get("gender") not in allowed_genders:
             errors["gender"] = "invalid gender value."
         else:
             updates["gender"] = data.get("gender")
 
-    if "surveyId" in data or "survey_id" in data:
-        sid = data.get("surveyId") or data.get("survey_id")
-        if not validate_guid(sid):
-            errors["surveyId"] = "surveyId must be a GUID."
+    # surveyId
+    if "surveyId" in data:
+        if not validate_guid(data.get("surveyId")):
+            errors["surveyId"] = "surveyId must be a valid GUID."
         else:
-            updates["survey_id"] = sid
-
-    if "phone" in data:
-        if not is_valid_phone(data.get("phone")):
-            errors["phone"] = "invalid phone format."
-        else:
-            updates["phone"] = data.get("phone")
-
-    if "email" in data:
-        if not is_valid_email(data.get("email")):
-            errors["email"] = "invalid email format."
-        else:
-            updates["email"] = data.get("email")
-
-    if "location" in data:
-        loc = data.get("location")
-        if not isinstance(loc, dict) or loc.get("lat") is None or loc.get("lng") is None:
-            errors["location"] = "location must be an object with lat and lng numbers."
-        else:
-            try:
-                updates["location"] = {
-                    "lat": float(loc.get("lat")),
-                    "lng": float(loc.get("lng")),
-                    "accuracy_m": loc.get("accuracy_m")
-                }
-            except Exception:
-                errors["location"] = "lat and lng must be numbers."
+            updates["surveyId"] = data.get("surveyId")
 
     if errors:
         return bad_request("Validation failed", errors)
@@ -264,7 +219,9 @@ def update_participant(participant_id):
 def delete_participant(participant_id):
     if not validate_guid(participant_id):
         return bad_request("Invalid participant_id (GUID expected).")
+
     result = participants.delete_one({"_id": participant_id})
     if result.deleted_count == 0:
         return jsonify({"success": False, "message": "Participant not found"}), 404
+
     return jsonify({"success": True, "message": "Participant deleted successfully"}), 200
