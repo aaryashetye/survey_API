@@ -1,6 +1,7 @@
 # file: survey_bp.py
 from flask import Blueprint, jsonify, request
 from database import surveys  # MongoDB collection
+
 # optional imports for count recalculation; if your database module exposes these, uncomment above or ensure available
 try:
     from database import questions as questions_col
@@ -83,10 +84,10 @@ def create_survey():
     if not data:
         return bad_request("Missing JSON body")
 
-    # expected body:
+    # expected body (id is now ignored, server generates GUID):
     # {
-    #   "id": "survey_001",
-    #   "title": "Village Nutrition Survey 2025",
+    #   "id": "anything",                      # ignored
+    #   "title": "Village Nutrition Survey",
     #   "createdBy": "...GUID...",
     #   "createdAt": "2025-01-01T10:30:00Z",
     #   "currentParticipants": 0,
@@ -94,7 +95,8 @@ def create_survey():
     #   "isCompleted": false
     # }
 
-    survey_id = data.get("id")
+    survey_id = make_guid()  # ALWAYS a new GUID
+
     title = data.get("title")
     created_by = data.get("createdBy")
     created_at = data.get("createdAt") or iso_now()
@@ -104,13 +106,11 @@ def create_survey():
 
     errors = {}
 
-    # id required, but not forced to be GUID (you use "survey_001")
-    if not survey_id or not isinstance(survey_id, str) or survey_id.strip() == "":
-        errors["id"] = "id is required and must be a non-empty string."
-
+    # title required
     if not title or not isinstance(title, str) or title.strip() == "":
         errors["title"] = "title is required and must be a non-empty string."
 
+    # createdBy optional but must be GUID if present
     if created_by is not None and not validate_guid(created_by):
         errors["createdBy"] = "createdBy must be a GUID if provided."
 
@@ -127,7 +127,6 @@ def create_survey():
 
     # boolean field
     if not isinstance(is_completed, bool):
-        # allow "true"/"false" style strings if needed
         if isinstance(is_completed, str):
             is_completed = is_completed.lower() == "true"
         else:
@@ -139,7 +138,7 @@ def create_survey():
     now = iso_now()
 
     doc = {
-        "_id": survey_id,  # use your "id" as primary key
+        "_id": survey_id,  # GUID
         "title": title.strip(),
         "created_by": created_by,
         "created_at": created_at,
@@ -169,9 +168,9 @@ def get_all_surveys():
 # ----------------- GET survey by id -----------------
 @survey_bp.route("/surveys/<string:survey_id>", methods=["GET"])
 def get_survey(survey_id):
-    # no longer require GUID; just require non-empty string
-    if not survey_id:
-        return bad_request("Invalid survey_id.")
+    # now survey_id is a GUID
+    if not validate_guid(survey_id):
+        return bad_request("Invalid survey_id (GUID expected).")
     doc = surveys.find_one({"_id": survey_id})
     if not doc:
         return jsonify({"success": False, "message": "Survey not found"}), 404
@@ -181,8 +180,8 @@ def get_survey(survey_id):
 # ----------------- UPDATE survey -----------------
 @survey_bp.route("/surveys/<string:survey_id>", methods=["PUT"])
 def update_survey(survey_id):
-    if not survey_id:
-        return bad_request("Invalid survey_id.")
+    if not validate_guid(survey_id):
+        return bad_request("Invalid survey_id (GUID expected).")
 
     data = request.get_json(force=True, silent=True)
     if not data:
@@ -249,8 +248,8 @@ def update_survey(survey_id):
 # ----------------- DELETE survey -----------------
 @survey_bp.route("/surveys/<string:survey_id>", methods=["DELETE"])
 def delete_survey(survey_id):
-    if not survey_id:
-        return bad_request("Invalid survey_id.")
+    if not validate_guid(survey_id):
+        return bad_request("Invalid survey_id (GUID expected).")
     res = surveys.delete_one({"_id": survey_id})
     if res.deleted_count == 0:
         return jsonify({"success": False, "message": "Survey not found"}), 404
@@ -260,8 +259,8 @@ def delete_survey(survey_id):
 # ----------------- OPTIONAL: Recalculate counts from other collections -----------------
 @survey_bp.route("/surveys/<string:survey_id>/recalculate_counts", methods=["POST"])
 def recalculate_counts(survey_id):
-    if not survey_id:
-        return bad_request("Invalid survey_id.")
+    if not validate_guid(survey_id):
+        return bad_request("Invalid survey_id (GUID expected).")
 
     # require the optional collections to be available
     if questions_col is None and participants_col is None:
@@ -275,7 +274,6 @@ def recalculate_counts(survey_id):
         qcount = 0
         if qdoc and "questions" in qdoc:
             qcount = len(qdoc["questions"])
-        # you can still store this if you want, or ignore
         new_counts["question_count"] = qcount
 
     if participants_col is not None:
