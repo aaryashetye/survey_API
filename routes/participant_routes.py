@@ -8,16 +8,20 @@ from bson import ObjectId
 
 participant_bp = Blueprint("participant_bp", __name__)
 
-GUID_RE = re.compile(r'^[0-9a-fA-F0-9\-]{36}$')
+GUID_RE = re.compile(r'^[0-9a-fA-F\-]{36}$')
+
 
 def make_guid():
     return str(uuid.uuid4())
 
+
 def iso_now():
     return datetime.now(timezone.utc).astimezone().isoformat()
 
+
 def validate_guid(g):
     return isinstance(g, str) and GUID_RE.match(g)
+
 
 def serialize_value(v):
     if isinstance(v, ObjectId):
@@ -28,16 +32,18 @@ def serialize_value(v):
         return [serialize_value(x) for x in v]
     return v
 
+
 def serialize_doc(doc):
     if not doc:
         return doc
     out = {}
     for k, v in doc.items():
         if k == "_id":
-            out[k] = str(v)
+            out["id"] = str(v)          # expose as "id"
         else:
             out[k] = serialize_value(v)
     return out
+
 
 def bad_request(msg, errors=None):
     payload = {"success": False, "message": msg}
@@ -45,16 +51,19 @@ def bad_request(msg, errors=None):
         payload["errors"] = errors
     return jsonify(payload), 400
 
+
 def is_valid_phone(p):
     if not p:
         return False
     # very basic international-ish phone pattern (allows digits, +, -, spaces)
     return bool(re.match(r'^[\+\d][\d\-\s]{5,20}$', str(p)))
 
+
 def is_valid_email(e):
     if not e:
         return False
     return bool(re.match(r"^[^@]+@[^@]+\.[^@]+$", str(e)))
+
 
 # ----------------- CREATE Participant -----------------
 @participant_bp.route("/participants", methods=["POST"])
@@ -63,17 +72,29 @@ def create_participant():
     if not data:
         return bad_request("Missing JSON body")
 
+    # expected main fields
+    participant_id = data.get("id")            # GUID from client
     name = data.get("name")
     age = data.get("age")
     gender = data.get("gender")
-    survey_id = data.get("survey_id")
+    survey_id = data.get("surveyId") or data.get("survey_id")
+
+    # still optionally allow these
     phone = data.get("phone")
     email = data.get("email")
     location = data.get("location")  # optional: {lat, lng}
 
     errors = {}
+
+    # id must be a GUID string
+    if not participant_id or not isinstance(participant_id, str):
+        errors["id"] = "id is required and must be a string GUID."
+    elif not validate_guid(participant_id):
+        errors["id"] = "id must be a valid GUID."
+
     if not name or not isinstance(name, str):
         errors["name"] = "name is required and must be a string."
+
     if age is not None:
         try:
             age = int(age)
@@ -81,11 +102,12 @@ def create_participant():
                 errors["age"] = "age must be a reasonable integer."
         except Exception:
             errors["age"] = "age must be an integer."
+
     if gender is not None and gender not in {"male", "female", "other", "prefer_not_to_say"}:
         errors["gender"] = "gender must be one of male/female/other/prefer_not_to_say or omitted."
 
     if survey_id is not None and not validate_guid(survey_id):
-        errors["survey_id"] = "survey_id must be a GUID if provided."
+        errors["surveyId"] = "surveyId must be a GUID if provided."
 
     if phone is not None and not is_valid_phone(phone):
         errors["phone"] = "invalid phone format."
@@ -98,17 +120,21 @@ def create_participant():
             errors["location"] = "location must be an object with lat and lng numbers."
         else:
             try:
-                location = {"lat": float(location.get("lat")), "lng": float(location.get("lng")), "accuracy_m": location.get("accuracy_m")}
+                location = {
+                    "lat": float(location.get("lat")),
+                    "lng": float(location.get("lng")),
+                    "accuracy_m": location.get("accuracy_m")
+                }
             except Exception:
                 errors["location"] = "lat and lng must be numbers."
 
     if errors:
         return bad_request("Validation failed", errors)
 
-    participant_id = make_guid()
+    # use client-sent GUID as _id
     doc = {
         "_id": participant_id,
-        "first_name": name,
+        "name": name,
         "age": age,
         "gender": gender,
         "survey_id": survey_id,
@@ -126,12 +152,14 @@ def create_participant():
         "participant_id": participant_id
     }), 201
 
+
 # ----------------- GET ALL Participants -----------------
 @participant_bp.route("/participants", methods=["GET"])
 def get_all_participants():
     cursor = list(participants.find({}))
     serialized = [serialize_doc(d) for d in cursor]
     return jsonify(serialized), 200
+
 
 # ----------------- GET single Participant -----------------
 @participant_bp.route("/participants/<string:participant_id>", methods=["GET"])
@@ -142,6 +170,7 @@ def get_participant(participant_id):
     if p:
         return jsonify(serialize_doc(p)), 200
     return jsonify({"success": False, "message": "Participant not found"}), 404
+
 
 # ----------------- UPDATE Participant -----------------
 @participant_bp.route("/participants/<string:participant_id>", methods=["PUT"])
@@ -159,7 +188,7 @@ def update_participant(participant_id):
         if not isinstance(data.get("name"), str):
             errors["name"] = "name must be a string."
         else:
-            updates["first_name"] = data.get("name")
+            updates["name"] = data.get("name")
 
     if "age" in data:
         try:
@@ -177,11 +206,12 @@ def update_participant(participant_id):
         else:
             updates["gender"] = data.get("gender")
 
-    if "survey_id" in data:
-        if not validate_guid(data.get("survey_id")):
-            errors["survey_id"] = "survey_id must be a GUID."
+    if "surveyId" in data or "survey_id" in data:
+        sid = data.get("surveyId") or data.get("survey_id")
+        if not validate_guid(sid):
+            errors["surveyId"] = "surveyId must be a GUID."
         else:
-            updates["survey_id"] = data.get("survey_id")
+            updates["survey_id"] = sid
 
     if "phone" in data:
         if not is_valid_phone(data.get("phone")):
@@ -201,7 +231,11 @@ def update_participant(participant_id):
             errors["location"] = "location must be an object with lat and lng numbers."
         else:
             try:
-                updates["location"] = {"lat": float(loc.get("lat")), "lng": float(loc.get("lng")), "accuracy_m": loc.get("accuracy_m")}
+                updates["location"] = {
+                    "lat": float(loc.get("lat")),
+                    "lng": float(loc.get("lng")),
+                    "accuracy_m": loc.get("accuracy_m")
+                }
             except Exception:
                 errors["location"] = "lat and lng must be numbers."
 
@@ -218,7 +252,12 @@ def update_participant(participant_id):
         return jsonify({"success": False, "message": "Participant not found"}), 404
 
     updated = participants.find_one({"_id": participant_id})
-    return jsonify({"success": True, "message": "Participant updated", "data": serialize_doc(updated)}), 200
+    return jsonify({
+        "success": True,
+        "message": "Participant updated",
+        "data": serialize_doc(updated)
+    }), 200
+
 
 # ----------------- DELETE Participant -----------------
 @participant_bp.route("/participants/<string:participant_id>", methods=["DELETE"])
