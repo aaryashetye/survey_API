@@ -39,3 +39,60 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)
 
 CORS(app, resources={r"/*": {"origins": ["*"]}})
+
+from flask import Flask, jsonify
+from flask_cors import CORS
+import os
+
+# Import your blueprints
+from routes.admin_routes import admin_bp
+from routes.participant_routes import participant_bp
+from routes.surveyor_routes import surveyor_bp
+from routes.survey_routes import survey_bp
+from routes.response_routes import response_bp
+from routes.analysis_routes import analysis_bp
+from routes.cycle_routes import cycle_bp
+from routes.question_routes import question_bp
+
+# -----------------------------
+# 1) Create app + enable CORS
+# -----------------------------
+app = Flask(__name__)
+
+# ✅ Apply CORS immediately after app creation
+CORS(
+    app,
+    resources={r"/*": {"origins": "*"}},
+)
+
+# -----------------------------
+# 2) Register blueprints
+# -----------------------------
+app.register_blueprint(admin_bp)
+app.register_blueprint(participant_bp)
+app.register_blueprint(surveyor_bp)
+app.register_blueprint(survey_bp)
+app.register_blueprint(response_bp)
+app.register_blueprint(analysis_bp)
+app.register_blueprint(cycle_bp)
+app.register_blueprint(question_bp)
+
+# -----------------------------
+# 3) Simple health route
+# -----------------------------
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"message": "Admin API running on Render!"})
+
+# -----------------------------
+# 4) Local run entrypoint
+# -----------------------------
+if __name__ == "__main__":
+    # Render sets $PORT in environment
+    port = int(os.environ.get("PORT", 5000))
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=True,
+        use_reloader=False,
+    )
