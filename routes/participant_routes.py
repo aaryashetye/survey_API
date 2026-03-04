@@ -223,5 +223,7 @@ def delete_participant(participant_id):
     result = participants.delete_one({"_id": participant_id})
     if result.deleted_count == 0:
         return jsonify({"success": False, "message": "Participant not found"}), 404
+    
+    db.responses.delete_many({"participantId": participant_id})  # also delete related responses
 
     return jsonify({"success": True, "message": "Participant deleted successfully"}), 200
