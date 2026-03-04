@@ -76,6 +76,8 @@ def create_participant():
     age = data.get("age")
     gender = data.get("gender")
     survey_id = data.get("surveyId")
+    surveyor_id = data.get("surveyorId")  
+   
 
     errors = {}
 
@@ -124,6 +126,32 @@ def create_participant():
         "message": "Participant created successfully.",
         "participant_id": participant_id
     }), 201
+    
+    #surveyorID
+    if not surveyor_id:
+        errors["surveyor_id"] = "surveyor_id is required."
+
+    if errors:
+        return bad_request("Validation failed", errors)
+
+    doc = {
+        "_id": participant_id,
+        "name": name,
+        "age": age,
+        "gender": gender,
+        "surveyId": survey_id,
+        "surveyor_id": surveyor_id,   # ⭐ SAVE IT
+        "created_at": iso_now()
+    }
+
+    participants.insert_one(doc)
+
+    return jsonify({
+        "success": True,
+        "message": "Participant created successfully.",
+        "participant_id": participant_id
+    }), 201
+
 
 
 # ----------------- GET ALL Participants -----------------
