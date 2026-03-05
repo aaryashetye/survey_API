@@ -116,6 +116,7 @@ def create_participant():
         "age": age,
         "gender": gender,
         "surveyId": survey_id,
+        "surveyor_id": surveyor_id,   # ⭐ SAVE IT  
         "created_at": iso_now()
     }
 
@@ -151,8 +152,6 @@ def create_participant():
         "message": "Participant created successfully.",
         "participant_id": participant_id
     }), 201
-
-
 
 # ----------------- GET ALL Participants -----------------
 @participant_bp.route("/participants", methods=["GET"])
