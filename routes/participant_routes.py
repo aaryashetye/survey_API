@@ -1,5 +1,6 @@
+
 from flask import Blueprint, jsonify, request
-from database import participants  # MongoDB collection
+from database import participants, responses  # MongoDB collection
 import uuid
 import re
 from datetime import datetime, timezone
@@ -252,14 +253,14 @@ def delete_participant(participant_id):
     if result.deleted_count == 0:
         return jsonify({"success": False, "message": "Participant not found"}), 404
     
-    db.responses.delete_many({"participantId": participant_id})  # also delete related responses
+    responses.delete_many({"participantId": participant_id})  # also delete related responses
 
     return jsonify({"success": True, "message": "Participant deleted successfully"}), 200
 
 @participant_bp.route("/participants", methods=["DELETE"])
 def delete_all_participants():
     result = participants.delete_many({})
-    db.responses.delete_many({"participantId": {"$in": [p["_id"] for p in list(participants.find({}))]}})
+    responses.delete_many({"participantId": {"$in": [p["_id"] for p in list(participants.find({}))]}})
     return jsonify({
         "message": "All participants deleted successfully",
         "deleted_count": result.deleted_count
