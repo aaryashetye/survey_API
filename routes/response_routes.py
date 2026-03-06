@@ -1,4 +1,6 @@
 # response_bp.py
+from unittest import result
+
 from flask import Blueprint, jsonify, request
 from database import responses, questions   # MongoDB collections
 import uuid
@@ -324,3 +326,11 @@ def delete_response(response_id):
     if res.deleted_count == 0:
         return jsonify({"error": "Response not found"}), 404
     return jsonify({"success": True, "message": "Response deleted successfully!"}), 200
+
+@response_bp.route("/responses/<string:response>", methods=["DELETE"])
+def delete_response(response):
+    res = responses.delete_many({})
+    return jsonify({
+        "message": "All responses deleted successfully",
+        "deleted_count": res.deleted_count
+    }), 200
