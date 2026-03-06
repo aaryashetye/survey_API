@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timezone
 from bson import ObjectId
 
+
 participant_bp = Blueprint("participant_bp", __name__)
 
 GUID_RE = re.compile(r'^[0-9a-fA-F\-]{36}$')
@@ -254,3 +255,12 @@ def delete_participant(participant_id):
     db.responses.delete_many({"participantId": participant_id})  # also delete related responses
 
     return jsonify({"success": True, "message": "Participant deleted successfully"}), 200
+
+@participant_bp.route("/participants", methods=["DELETE"])
+def delete_all_participants():
+    result = participants.delete_many({})
+    db.responses.delete_many({"participantId": {"$in": [p["_id"] for p in list(participants.find({}))]}})
+    return jsonify({
+        "message": "All participants deleted successfully",
+        "deleted_count": result.deleted_count
+    }), 200

@@ -327,8 +327,8 @@ def delete_response(response_id):
         return jsonify({"error": "Response not found"}), 404
     return jsonify({"success": True, "message": "Response deleted successfully!"}), 200
 
-@response_bp.route("/responses/<string:response>", methods=["DELETE"])
-def delete_response(response):
+@response_bp.route("/responses", methods=["DELETE"])
+def delete_all_responses():
     res = responses.delete_many({})
     return jsonify({
         "message": "All responses deleted successfully",
