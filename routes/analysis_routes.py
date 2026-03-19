@@ -1,39 +1,54 @@
 from flask import Blueprint, jsonify
-from database import responses, participants, questions
-from utils.ai_engine import compare_question    
+from database import responses, participants
+
+from utils.ai_engine import analyze_trends
+from utils.ai_local import generate_local_analysis
 
 analysis_bp = Blueprint("analysis_bp", __name__)
 
 
-# ---------- AI CLASSIFICATION ----------
-def classify_change(change):
-    if change >= 2:
-        return "Significant Improvement"
-    elif change == 1:
-        return "Slight Improvement"
-    elif change == 0:
-        return "No Change"
-    elif change == -1:
-        return "Slight Decline"
-    else:
-        return "Significant Decline"
-
-
-# ---------- AI ANALYSIS ROUTE ----------
-@analysis_bp.route("/analysis/<string:surveyor_id>", methods=["GET"])
-def get_ai_analysis(surveyor_id):
-
-    # Load raw responses
-    res = list(responses.find({"surveyor_id": surveyor_id}))
-    parts = list(participants.find({}))
-    qs = list(questions.find({}))
-
-    # Map participant names
-    participant_map = {str(p["_id"]): p.get("name","Unknown") for p in parts}
+# ---------- HELPER ----------
+def build_grouped_data(survey_responses):
 
     grouped = {}
 
-    # Group responses by participant
+    for r in survey_responses:
+        pid = str(r["participant_id"])
+
+        grouped.setdefault(pid, {
+            "participant_id": pid,
+            "cycles": []
+        })
+
+        grouped[pid]["cycles"].append({
+            "cycle_id": r.get("cycle_id"),
+            "timestamp": r.get("timestamp"),
+            "answers": [
+                {
+                    "questionNo": str(a["question_id"]),
+                    "rating": a.get("rating"),
+                    "answer": a.get("value_text")
+                }
+                for a in r.get("answers", [])
+            ]
+        })
+
+    return grouped
+
+
+# ---------- ROUTE 1 (DETAILED ANALYSIS) ----------
+@analysis_bp.route("/analysis/<string:surveyor_id>", methods=["GET"])
+def get_ai_analysis(surveyor_id):
+
+    res = list(responses.find({"surveyor_id": surveyor_id}))
+    parts = list(participants.find({}))
+
+    participant_map = {
+        str(p["_id"]): p.get("name", "Unknown") for p in parts
+    }
+
+    grouped = {}
+
     for r in res:
 
         if not r.get("location"):
@@ -43,44 +58,53 @@ def get_ai_analysis(surveyor_id):
 
         if pid not in grouped:
             grouped[pid] = {
-                "name": participant_map.get(pid,"Unknown"),
-                "cycles":[]
+                "name": participant_map.get(pid, "Unknown"),
+                "cycles": []
             }
 
         grouped[pid]["cycles"].append({
             "timestamp": r.get("timestamp"),
             "lat": r["location"]["lat"],
             "lng": r["location"]["lng"],
-            "answers":[
+            "answers": [
                 {
                     "questionNo": str(a["question_id"]),
                     "rating": a.get("rating"),
                     "answer": a.get("value_text")
-                } for a in r.get("answers",[])
+                }
+                for a in r.get("answers", [])
             ]
         })
 
-    # ---------- AI PART ----------
-    for pid,data in grouped.items():
+    # ✅ Apply AI
+    result = analyze_trends(grouped)
 
-        data["cycles"].sort(key=lambda x: x["timestamp"])
+    return jsonify(result), 200
 
-        for i in range(len(data["cycles"])):
 
-            if i == 0:
-                data["cycles"][i]["status"] = "No Previous Data"
-                continue
+# ---------- ROUTE 2 (FULL AI REPORT) ----------
+@analysis_bp.route("/analysis/generate/<string:survey_id>", methods=["GET"])
+def generate_analysis(survey_id):
 
-            prev = data["cycles"][i-1]["answers"]
-            curr = data["cycles"][i]["answers"]
+    survey_responses = list(responses.find({"survey_id": survey_id}))
 
-            change = 0
+    if not survey_responses:
+        return jsonify({"error": "No data found"}), 404
 
-            for p in prev:
-                match = next((c for c in curr if c["questionNo"] == p["questionNo"]),None)
-                if match:
-                    change += p["rating"] - match["rating"]
+    # ✅ Trend AI
+    grouped = build_grouped_data(survey_responses)
+    trend_result = analyze_trends(grouped)
 
-            data["cycles"][i]["status"] = classify_change(change)
+    # ✅ Issue AI
+    all_text = []
 
-    return jsonify(grouped)
+    for r in survey_responses:
+        for ans in r.get("answers", []):
+            all_text.append(str(ans))
+
+    issue_result = generate_local_analysis(all_text)
+
+    return jsonify({
+        "trend_analysis": trend_result,
+        "issue_analysis": issue_result
+    }), 200
