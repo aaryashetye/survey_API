@@ -1,6 +1,7 @@
 # file: survey_bp.py
 from flask import Blueprint, jsonify, request
-from database import surveys  # MongoDB collection
+from database import surveys, questions, participants, responses, survey_cycles, analysis  # MongoDB collections
+
 
 # optional imports for count recalculation; if your database module exposes these, uncomment above or ensure available
 try:
@@ -254,6 +255,20 @@ def delete_survey(survey_id):
     if res.deleted_count == 0:
         return jsonify({"success": False, "message": "Survey not found"}), 404
     return jsonify({"success": True, "message": "Survey deleted successfully"}), 200
+
+@survey_bp.route("/surveys", methods=["DELETE"])
+def delete_all_surveys():
+
+    surveys.delete_many({})
+    questions.delete_many({})
+    participants.delete_many({})
+    responses.delete_many({})
+    survey_cycles.delete_many({})
+    analysis.delete_many({})
+
+    return jsonify({
+        "message": "All surveys and related data deleted"
+    }), 200
 
 
 # ----------------- OPTIONAL: Recalculate counts from other collections -----------------
