@@ -56,3 +56,13 @@ def delete_admin(admin_id):
     if result.deleted_count == 0:
         return jsonify({"error": "Admin not found"}), 404
     return jsonify({"message": "🗑️ Admin deleted successfully!"}), 200
+
+@admin_bp.route("/admins", methods=["DELETE"])
+def delete_all_admins():
+
+    result = admins.delete_many({})
+
+    return jsonify({
+        "message": "All admins deleted",
+        "deleted_count": result.deleted_count
+    }), 200
